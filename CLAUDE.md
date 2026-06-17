@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A web-based voice chat platform. No accounts — users enter a nickname, create or join a **room** by 6-character room code. Everyone is equal (no admin/roles). Voice chat via LiveKit SFU (Cloud-hosted, no self-hosted SFU needed for dev).
 
-**MVP scope (current):** voice only — no text chat, no screen sharing, no admin roles. Those are deferred to later phases.
+**Current scope:** voice + text chat. Screen sharing and admin roles are deferred to later phases.
 
 ## Repo structure
 
@@ -15,7 +15,7 @@ voice-chat/
 ├── server/                Fastify API server (TypeScript, port 3001)
 │   └── src/
 │       ├── index.ts       Entry point — inits SQLite, registers routes
-│       ├── routes.ts      3 REST endpoints (rooms CRUD + LiveKit token signing)
+│       ├── routes.ts      5 REST endpoints (rooms CRUD + token + chat messages)
 │       └── db.ts          sql.js (WASM SQLite) — initDb, dbRun, dbGet, dbAll
 ├── frontend/              React 19 + Vite SPA (TypeScript, port 5173)
 │   └── src/
@@ -23,11 +23,16 @@ voice-chat/
 │       ├── pages/
 │       │   ├── Home.tsx          Create room or join by room code; nickname entry; recent rooms
 │       │   ├── PreJoin.tsx       Nickname input + microphone permission & test before entering
-│       │   └── Room.tsx          LiveKitRoom — token fetch, participant grid, speaker mute, toolbar
+│       │   └── Room.tsx          LiveKitRoom + chat panel — token, polling, participant grid, toolbar
 │       ├── components/
-│       │   └── Toolbar.tsx       Mic toggle (LiveKit TrackToggle) + speaker toggle + leave button
+│       │   ├── Toolbar.tsx       Mic toggle (LiveKit TrackToggle) + speaker toggle + leave button
+│       │   └── chat/
+│       │       ├── ChatPanel.tsx      Right sidebar container (320px)
+│       │       ├── MessageList.tsx    Scrollable message list, auto-scroll, load-older trigger
+│       │       ├── MessageItem.tsx    Single message: avatar, nickname, time, content
+│       │       └── MessageInput.tsx   Text input + send button, Enter to send
 │       └── lib/
-│           ├── api.ts            Typed fetch for 3 endpoints (createRoom, checkRoom, getLiveKitToken)
+│           ├── api.ts            Typed fetch for 5 endpoints (rooms + token + chat messages)
 │           ├── session.ts        localStorage: sessionId (UUID), recent rooms (max 10)
 │           └── roomChannel.ts    BroadcastChannel — prevents same-room multi-tab echo
 ├── docker-compose.yml      Caddy + server + livekit + redis (self-hosted, not needed for Cloud dev)
@@ -68,17 +73,34 @@ Server loads from `server/.env` (dotenv):
 |--------|------|------|---------|-------|
 | `POST` | `/api/rooms` | `{ name }` | `{ code, name, shareUrl }` | Room code: 6-char, charset `A-Z,2-9` (no 0/O/I/L) |
 | `GET` | `/api/rooms/:code` | — | `{ exists, code, name, created_at }` | Case-insensitive. Returns 404 with `exists: false` if not found |
-| `POST` | `/api/token` | `{ code, nickname }` | `{ token, livekitUrl, roomName, roomCode, roomName2 }` | Verifies room exists before signing. `roomName2` = room display name |
+| `POST` | `/api/token` | `{ code, nickname }` | `{ token, livekitUrl, roomName, roomCode, roomName2 }` | Verifies room exists before signing |
+| `POST` | `/api/rooms/:code/messages` | `{ sessionId, nickname, content }` | `ChatMessage` (201) | Validates: room exists, content 1-2000 chars, nickname non-empty |
+| `GET` | `/api/rooms/:code/messages` | `?after=<id>` or `?before=<ts>&limit=50` | `{ messages[], hasMore }` | Polling mode (`after`) or pagination mode (`before`). Max limit 100 |
 
 ## Database (sql.js WASM SQLite)
 
-One table — `rooms`:
+Two tables:
+
+**rooms**
 
 | Column | Type | Notes |
 |--------|------|-------|
 | `code` | TEXT PK | 6-char room code, uppercase |
 | `name` | TEXT NOT NULL | Room display name (2-32 chars) |
 | `created_at` | INTEGER | Unix timestamp |
+
+**messages**
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | TEXT PK | nanoid(21), server-generated |
+| `room_code` | TEXT FK→rooms | Uppercase room code |
+| `sender_nickname` | TEXT | Display name at send time (denormalized) |
+| `sender_session_id` | TEXT | Browser sessionId, for avatar color + coalescing |
+| `content` | TEXT | Message body, 1-2000 chars |
+| `created_at` | INTEGER | Unix timestamp (seconds) |
+
+Index: `(room_code, created_at DESC)` for fast polling queries.
 
 Persistence: **every `dbRun()` call exports the full WASM buffer to disk**. This is fine for low-write workloads but would not scale to high concurrency. Delete `data.db` to reset the database.
 
@@ -92,7 +114,7 @@ When navigating to `/room/:code`, **`location.state` must carry `{ nickname, roo
 
 - Identity format: `{nickname}#{random6}` — the random suffix prevents participant identity collisions when users pick the same nickname
 - Room name = 6-char room code directly (no prefix)
-- Grants: `roomJoin`, `canPublish`, `canSubscribe` only (no `canPublishData` — text chat is deferred)
+- Grants: `roomJoin`, `canPublish`, `canSubscribe`, `canPublishData` (for text chat via LiveKit data channel in the future)
 - TTL: 10 minutes (only used to establish connection; LiveKit maintains the session after)
 - `livekitUrl` returned to client: the `wss://` LiveKit Cloud URL; browser connects directly to LiveKit for media
 
@@ -124,6 +146,26 @@ This enables browser-level AEC. Without these, Chrome defaults may vary.
 - Server: `tsx watch` runs TypeScript directly (no `tsc` step)
 - Frontend: Vite handles TypeScript transpilation on the fly
 - `npm run build` in server is `tsc` → `dist/` (only needed for production/Docker)
+
+### Text chat architecture
+
+Chat uses **REST persistence + polling** for real-time delivery. No WebSocket or LiveKit data channel — those are future upgrades.
+
+**Flow:**
+1. Room.tsx fetches latest 50 messages on mount via `GET /api/rooms/:code/messages`
+2. A `setInterval` (2s) polls `GET /api/rooms/:code/messages?after=<lastId>` for new messages
+3. Sending: `POST /api/rooms/:code/messages` → server generates nanoid, inserts, returns 201
+4. Optimistic: the sent message is appended to local state immediately after the API responds
+
+**Client state:**
+- `messages: ChatMessage[]` — all loaded messages
+- `lastMessageIdRef` — cursor for polling (updates every fetch)
+- `unreadCount` — incremented while `chatOpen === false`, reset to 0 when panel opens
+- `hasMoreMessages` — controls "load older" trigger at top of list
+
+**Message coalescing:** `MessageItem` skips the avatar/nickname/header when the same sender sends within 5 minutes of their last message.
+
+**Layout:** Voice area (`flex: 1`) + ChatPanel (320px, conditional). Panel has `padding-bottom: 80px` to clear the fixed Toolbar.
 
 ## Known quirks & pitfalls
 
