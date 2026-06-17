@@ -1,0 +1,23 @@
+your-domain.com {
+        # Token server API
+        handle_path /api/* {
+                reverse_proxy server:3001
+        }
+
+        # Application WebSocket (chat + presence)
+        handle_path /ws {
+                reverse_proxy server:3001
+        }
+
+        # LiveKit WebSocket signaling
+        handle_path /livekit-ws {
+                reverse_proxy livekit:7880
+        }
+
+        # Frontend static files
+        handle {
+                root * /srv
+                try_files {path} /index.html
+                file_server
+        }
+}

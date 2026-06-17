@@ -1,0 +1,54 @@
+version: "3.9"
+
+services:
+  # ── Caddy 反向代理 ──
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+    depends_on:
+      - server
+
+  # ── 令牌服务 ──
+  server:
+    build: ./server
+    restart: unless-stopped
+    environment:
+      - PORT=3001
+      - LIVEKIT_URL=ws://localhost:7880
+      - LIVEKIT_API_KEY=devkey
+      - LIVEKIT_API_SECRET=secret
+      - BASE_URL=http://localhost
+      - DB_PATH=/data/rooms.db
+    volumes:
+      - server_data:/data
+    depends_on:
+      - livekit
+
+  # ── LiveKit SFU ──
+  livekit:
+    image: livekit/livekit-server:latest
+    restart: unless-stopped
+    command: --config /etc/livekit.yaml --node-ip=livekit
+    ports:
+      - "7880:7880"  # WebSocket signaling
+      - "7881:7881"  # TCP fallback
+      - "50000-60000:50000-60000/udp"  # WebRTC media
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml
+    depends_on:
+      - redis
+
+  # ── Redis ──
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  server_data:
