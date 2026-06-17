@@ -40,6 +40,23 @@ export async function initDb(): Promise<Database> {
     )
   `);
 
+  // ── Messages ──
+  db.run(`
+    CREATE TABLE IF NOT EXISTS messages (
+      id                TEXT PRIMARY KEY,
+      room_code         TEXT NOT NULL,
+      sender_nickname   TEXT NOT NULL,
+      sender_session_id TEXT NOT NULL,
+      content           TEXT NOT NULL,
+      created_at        INTEGER NOT NULL DEFAULT (unixepoch()),
+      FOREIGN KEY (room_code) REFERENCES rooms(code)
+    )
+  `);
+  db.run(`
+    CREATE INDEX IF NOT EXISTS idx_messages_room_time
+      ON messages(room_code, created_at DESC)
+  `);
+
   saveDb();
   return db;
 }

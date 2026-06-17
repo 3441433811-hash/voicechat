@@ -9,10 +9,16 @@ import {
 } from "@livekit/components-react";
 import "@livekit/components-styles";
 import { Track } from "livekit-client";
-import { getLiveKitToken } from "../lib/api";
-import { addRecentRoom } from "../lib/session";
+import {
+  getLiveKitToken,
+  getMessages,
+  sendMessage,
+  type ChatMessage,
+} from "../lib/api";
+import { addRecentRoom, getSessionId } from "../lib/session";
 import { notifyRoomJoined, listenForDuplicate } from "../lib/roomChannel";
 import Toolbar from "../components/Toolbar";
+import ChatPanel from "../components/chat/ChatPanel";
 
 export default function Room() {
   const { code } = useParams<{ code: string }>();
@@ -28,6 +34,16 @@ export default function Room() {
   const [connecting, setConnecting] = useState(true);
   const [speakerOn, setSpeakerOn] = useState(true);
   const mainRef = useRef<HTMLDivElement>(null);
+
+  // Chat state
+  const [chatOpen, setChatOpen] = useState(false);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [messagesLoading, setMessagesLoading] = useState(false);
+  const [hasMoreMessages, setHasMoreMessages] = useState(true);
+  const lastMessageIdRef = useRef<string | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const sessionId = getSessionId();
 
   // Mute/unmute all <audio> elements when speakerOn changes.
   // RoomAudioRenderer creates audio elements dynamically — we control them
@@ -86,6 +102,97 @@ export default function Room() {
 
     return cleanup;
   }, [code, state?.nickname]);
+
+  // ── Chat: initial message load ──
+  useEffect(() => {
+    if (!token || !code) return;
+
+    (async () => {
+      setMessagesLoading(true);
+      try {
+        const result = await getMessages(code);
+        setMessages(result.messages);
+        setHasMoreMessages(result.hasMore);
+        if (result.messages.length > 0) {
+          lastMessageIdRef.current =
+            result.messages[result.messages.length - 1].id;
+        }
+      } catch {
+        // Silently ignore — chat will retry on next poll
+      } finally {
+        setMessagesLoading(false);
+      }
+    })();
+  }, [token, code]);
+
+  // ── Chat: polling for new messages ──
+  useEffect(() => {
+    if (!token || !code) return;
+
+    pollRef.current = setInterval(async () => {
+      try {
+        const result = await getMessages(code, {
+          after: lastMessageIdRef.current ?? undefined,
+        });
+        if (result.messages.length > 0) {
+          setMessages((prev) => [...prev, ...result.messages]);
+          lastMessageIdRef.current =
+            result.messages[result.messages.length - 1].id;
+
+          // Track unread when chat is closed
+          setChatOpen((open) => {
+            if (!open) {
+              setUnreadCount((c) => c + result.messages.length);
+            }
+            return open;
+          });
+        }
+      } catch {
+        // Silently ignore poll errors
+      }
+    }, 2000);
+
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [token, code]);
+
+  // Reset unread when opening chat
+  useEffect(() => {
+    if (chatOpen) setUnreadCount(0);
+  }, [chatOpen]);
+
+  // ── Chat actions ──
+
+  const handleSend = useCallback(
+    async (content: string) => {
+      if (!code) return;
+      try {
+        const msg = await sendMessage(code, sessionId, state?.nickname ?? "", content);
+        setMessages((prev) => [...prev, msg]);
+        lastMessageIdRef.current = msg.id;
+      } catch {
+        // Silently ignore
+      }
+    },
+    [code, sessionId, state?.nickname]
+  );
+
+  const handleLoadOlder = useCallback(async () => {
+    if (!code || messages.length === 0 || messagesLoading) return;
+    try {
+      const oldest = messages[0];
+      const result = await getMessages(code, {
+        before: oldest.created_at,
+      });
+      if (result.messages.length > 0) {
+        setMessages((prev) => [...result.messages, ...prev]);
+      }
+      setHasMoreMessages(result.hasMore);
+    } catch {
+      // Silently ignore
+    }
+  }, [code, messages, messagesLoading]);
 
   const handleLeave = useCallback(() => {
     navigate("/");
@@ -161,43 +268,78 @@ export default function Room() {
             房间号: {code}
           </span>
         </div>
-        <button
-          className="btn btn-ghost"
-          style={{ padding: "6px 12px", fontSize: 13 }}
-          onClick={() => {
-            const url = `${window.location.origin}/prejoin/${code}`;
-            navigator.clipboard.writeText(url).catch(() => {});
-          }}
-        >
-          📋 复制邀请链接
-        </button>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button
+            className="btn btn-ghost"
+            style={{ padding: "6px 12px", fontSize: 13 }}
+            onClick={() => {
+              const url = `${window.location.origin}/prejoin/${code}`;
+              navigator.clipboard.writeText(url).catch(() => {});
+            }}
+          >
+            📋 复制邀请链接
+          </button>
+          <button
+            className="btn btn-ghost chat-toggle-btn"
+            style={{ padding: "6px 12px", fontSize: 13 }}
+            onClick={() => setChatOpen((v) => !v)}
+          >
+            💬 聊天
+            {!chatOpen && unreadCount > 0 && (
+              <span className="chat-toggle-badge">
+                {unreadCount > 99 ? "99+" : unreadCount}
+              </span>
+            )}
+          </button>
+        </div>
       </div>
 
-      {/* Main area — participant grid */}
+      {/* Main area — voice + chat split */}
       <div
         style={{
           flex: 1,
-          overflow: "auto",
-          padding: 20,
+          display: "flex",
+          overflow: "hidden",
         }}
       >
-        <LiveKitRoom
-          token={token}
-          serverUrl={livekitUrl}
-          connect={true}
-          audio={true}
-          video={false}
-          onDisconnected={handleLeave}
-          style={{ height: "100%" }}
+        {/* Voice area */}
+        <div
+          style={{
+            flex: 1,
+            overflow: "auto",
+            padding: 20,
+            minWidth: 0,
+          }}
         >
-          <RoomAudioRenderer />
-          <ParticipantGrid />
-          <Toolbar
-            onLeave={handleLeave}
-            speakerOn={speakerOn}
-            onToggleSpeaker={() => setSpeakerOn((v) => !v)}
+          <LiveKitRoom
+            token={token}
+            serverUrl={livekitUrl}
+            connect={true}
+            audio={true}
+            video={false}
+            onDisconnected={handleLeave}
+            style={{ height: "100%" }}
+          >
+            <RoomAudioRenderer />
+            <ParticipantGrid />
+            <Toolbar
+              onLeave={handleLeave}
+              speakerOn={speakerOn}
+              onToggleSpeaker={() => setSpeakerOn((v) => !v)}
+            />
+          </LiveKitRoom>
+        </div>
+
+        {/* Chat panel */}
+        {chatOpen && (
+          <ChatPanel
+            messages={messages}
+            loading={messagesLoading}
+            hasMore={hasMoreMessages}
+            onSend={handleSend}
+            onLoadOlder={handleLoadOlder}
           />
-        </LiveKitRoom>
+        )}
       </div>
     </div>
   );
