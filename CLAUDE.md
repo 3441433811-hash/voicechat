@@ -23,7 +23,7 @@ voice-chat/
 │       ├── pages/
 │       │   ├── Home.tsx          Create room or join by room code; nickname entry; recent rooms
 │       │   ├── PreJoin.tsx       Nickname input + microphone permission & test before entering
-│       │   └── Room.tsx          LiveKitRoom + chat panel — token, polling, participant grid, toolbar
+│       │   └── Room.tsx          LiveKitRoom + ChatSync + chat panel — Data Channel real-time chat
 │       ├── components/
 │       │   ├── Toolbar.tsx       Mic toggle (LiveKit TrackToggle) + speaker toggle + leave button
 │       │   └── chat/
@@ -149,19 +149,27 @@ This enables browser-level AEC. Without these, Chrome defaults may vary.
 
 ### Text chat architecture
 
-Chat uses **REST persistence + polling** for real-time delivery. No WebSocket or LiveKit data channel — those are future upgrades.
+Chat uses **HTTP persistence + LiveKit Data Channel** for real-time delivery. The Data Channel provides instant (<100ms) message delivery, while HTTP stores messages in SQLite and serves history.
 
 **Flow:**
 1. Room.tsx fetches latest 50 messages on mount via `GET /api/rooms/:code/messages`
-2. A `setInterval` (2s) polls `GET /api/rooms/:code/messages?after=<lastId>` for new messages
-3. Sending: `POST /api/rooms/:code/messages` → server generates nanoid, inserts, returns 201
-4. Optimistic: the sent message is appended to local state immediately after the API responds
+2. Real-time receive: `ChatSync` component (inside `<LiveKitRoom>`) subscribes to `room.on("dataReceived")` → messages arrive instantly from other participants
+3. Sending: `POST /api/rooms/:code/messages` → server generates nanoid, inserts, returns 201 → then `room.localParticipant.publishData()` broadcasts to all others via LiveKit SFU
+4. Sender sees their own message after HTTP response; everyone else sees it via Data Channel (sub-100ms)
+5. History loading: `GET /api/rooms/:code/messages?before=<ts>` for "load older" pagination (unchanged)
+6. No polling — `setInterval` is removed entirely
 
 **Client state:**
 - `messages: ChatMessage[]` — all loaded messages
-- `lastMessageIdRef` — cursor for polling (updates every fetch)
+- `lastMessageIdRef` — tracks last received message ID, used for deduplication and future reconnect catch-up
+- `publishRef` — ref holding the Data Channel publish callback, wired by `ChatSync`
 - `unreadCount` — incremented while `chatOpen === false`, reset to 0 when panel opens
 - `hasMoreMessages` — controls "load older" trigger at top of list
+
+**`ChatSync` component** (inside `<LiveKitRoom>`, uses `useRoomContext()`):
+- Registers `publishRef` callback: encodes ChatMessage as JSON → `room.localParticipant.publishData(bytes, { reliable: true })`
+- Listens for incoming data: `room.on("dataReceived", handler)` → parses JSON → calls parent's `handleDataMessage`
+- Duplicate prevention: `handleDataMessage` checks `msg.room_code` matches current room and skips if `msg.id` already in state
 
 **Message coalescing:** `MessageItem` skips the avatar/nickname/header when the same sender sends within 5 minutes of their last message.
 

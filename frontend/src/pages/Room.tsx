@@ -6,6 +6,7 @@ import {
   ParticipantTile,
   RoomAudioRenderer,
   useTracks,
+  useRoomContext,
 } from "@livekit/components-react";
 import "@livekit/components-styles";
 import { Track } from "livekit-client";
@@ -42,7 +43,7 @@ export default function Room() {
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [hasMoreMessages, setHasMoreMessages] = useState(true);
   const lastMessageIdRef = useRef<string | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const publishRef = useRef<(msg: ChatMessage) => void>(() => {});
   const sessionId = getSessionId();
 
   // Mute/unmute all <audio> elements when speakerOn changes.
@@ -118,44 +119,34 @@ export default function Room() {
             result.messages[result.messages.length - 1].id;
         }
       } catch {
-        // Silently ignore — chat will retry on next poll
+        // Silently ignore — chat messages are delivered via Data Channel
       } finally {
         setMessagesLoading(false);
       }
     })();
   }, [token, code]);
 
-  // ── Chat: polling for new messages ──
-  useEffect(() => {
-    if (!token || !code) return;
+  // ── Chat: handle incoming Data Channel messages ──
+  const handleDataMessage = useCallback(
+    (msg: ChatMessage) => {
+      // Ensure message belongs to this room
+      if (msg.room_code.toUpperCase() !== code?.toUpperCase()) return;
 
-    pollRef.current = setInterval(async () => {
-      try {
-        const result = await getMessages(code, {
-          after: lastMessageIdRef.current ?? undefined,
-        });
-        if (result.messages.length > 0) {
-          setMessages((prev) => [...prev, ...result.messages]);
-          lastMessageIdRef.current =
-            result.messages[result.messages.length - 1].id;
+      setMessages((prev) => {
+        // Avoid duplicates (race with HTTP or replay)
+        if (prev.some((m) => m.id === msg.id)) return prev;
+        return [...prev, msg];
+      });
+      lastMessageIdRef.current = msg.id;
 
-          // Track unread when chat is closed
-          setChatOpen((open) => {
-            if (!open) {
-              setUnreadCount((c) => c + result.messages.length);
-            }
-            return open;
-          });
-        }
-      } catch {
-        // Silently ignore poll errors
-      }
-    }, 2000);
-
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
-  }, [token, code]);
+      // Track unread when chat is closed
+      setChatOpen((open) => {
+        if (!open) setUnreadCount((c) => c + 1);
+        return open;
+      });
+    },
+    [code]
+  );
 
   // Reset unread when opening chat
   useEffect(() => {
@@ -171,6 +162,8 @@ export default function Room() {
         const msg = await sendMessage(code, sessionId, state?.nickname ?? "", content);
         setMessages((prev) => [...prev, msg]);
         lastMessageIdRef.current = msg.id;
+        // Broadcast to other participants via LiveKit Data Channel (real-time)
+        publishRef.current(msg);
       } catch {
         // Silently ignore
       }
@@ -320,6 +313,10 @@ export default function Room() {
             onDisconnected={handleLeave}
             style={{ height: "100%" }}
           >
+            <ChatSync
+              onMessage={handleDataMessage}
+              onPublish={(pub) => { publishRef.current = pub; }}
+            />
             <RoomAudioRenderer />
             <ParticipantGrid />
             <Toolbar
@@ -343,6 +340,42 @@ export default function Room() {
       </div>
     </div>
   );
+}
+
+function ChatSync({
+  onMessage,
+  onPublish,
+}: {
+  onMessage: (msg: ChatMessage) => void;
+  onPublish: (publish: (msg: ChatMessage) => void) => void;
+}) {
+  const room = useRoomContext();
+
+  // Register the publish callback so the parent can broadcast
+  useEffect(() => {
+    onPublish((msg: ChatMessage) => {
+      const encoded = new TextEncoder().encode(JSON.stringify(msg));
+      room.localParticipant.publishData(encoded, { reliable: true });
+    });
+  }, [room, onPublish]);
+
+  // Listen for incoming data messages from other participants
+  useEffect(() => {
+    const handler = (payload: Uint8Array) => {
+      try {
+        const msg = JSON.parse(new TextDecoder().decode(payload)) as ChatMessage;
+        onMessage(msg);
+      } catch {
+        // Ignore malformed messages
+      }
+    };
+    room.on("dataReceived", handler);
+    return () => {
+      room.off("dataReceived", handler);
+    };
+  }, [room, onMessage]);
+
+  return null;
 }
 
 function ParticipantGrid() {
