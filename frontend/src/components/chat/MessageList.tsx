@@ -18,7 +18,7 @@ function shouldShowHeader(
   if (index === 0) return true;
   const prev = messages[index - 1];
   if (prev.sender_session_id !== msg.sender_session_id) return true;
-  if (msg.created_at - prev.created_at > 300) return true;
+  if (msg.created_at - prev.created_at > 300_000) return true;
   return false;
 }
 

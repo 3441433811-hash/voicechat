@@ -149,7 +149,7 @@ export async function registerRoutes(app: FastifyInstance) {
     }
 
     const id = nanoid();
-    const now = Math.floor(Date.now() / 1000);
+    const now = Date.now();
     const trimmedNickname = nickname.trim();
     const trimmedContent = content.trim();
 
@@ -214,7 +214,7 @@ export async function registerRoutes(app: FastifyInstance) {
       // Initial load / load older mode: fetch messages before a timestamp
       const before = query.before
         ? parseInt(query.before, 10)
-        : Math.floor(Date.now() / 1000) + 1;
+        : Date.now() + 1;
 
       messages = dbAll(
         `SELECT id, room_code, sender_nickname, sender_session_id, content, created_at

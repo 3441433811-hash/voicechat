@@ -22,7 +22,7 @@ function avatarChar(nickname: string): string {
 
 export default function MessageItem({ message, showHeader }: MessageItemProps) {
   const hue = sessionHue(message.sender_session_id);
-  const time = new Date(message.created_at * 1000).toLocaleTimeString(
+  const time = new Date(message.created_at).toLocaleTimeString(
     "zh-CN",
     { hour: "2-digit", minute: "2-digit" }
   );
