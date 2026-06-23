@@ -14,7 +14,7 @@ A web-based voice chat platform. No accounts — users enter a nickname, create 
 voice-chat/
 ├── server/                Fastify API server (TypeScript, port 3001)
 │   └── src/
-│       ├── index.ts       Entry point — inits SQLite, registers routes
+│       ├── index.ts       Entry point — inits SQLite, registers routes (6 endpoints)
 │       ├── routes.ts      5 REST endpoints (rooms CRUD + token + chat messages)
 │       └── db.ts          sql.js (WASM SQLite) — initDb, dbRun, dbGet, dbAll
 ├── frontend/              React 19 + Vite SPA (TypeScript, port 5173)
@@ -26,11 +26,14 @@ voice-chat/
 │       │   └── Room.tsx          LiveKitRoom + ChatSync + chat panel — Data Channel real-time chat
 │       ├── components/
 │       │   ├── Toolbar.tsx       Mic + screen share + speaker toggle + leave button
-│       │   └── chat/
-│       │       ├── ChatPanel.tsx      Right sidebar container (320px)
-│       │       ├── MessageList.tsx    Scrollable message list, auto-scroll, load-older trigger
-│       │       ├── MessageItem.tsx    Single message: avatar, nickname, time, content
-│       │       └── MessageInput.tsx   Text input + send button, Enter to send
+│       │   ├── chat/
+│       │   │   ├── ChatPanel.tsx      Right sidebar container (320px)
+│       │   │   ├── MessageList.tsx    Scrollable message list, auto-scroll, load-older trigger
+│       │   │   ├── MessageItem.tsx    Single message: avatar, nickname, time, content
+│       │   │   └── MessageInput.tsx   Text input + send button, Enter to send
+│       │   └── members/
+│       │       ├── MemberListPanel.tsx  Right sidebar — all online participants + status
+│       │       └── MemberItem.tsx       Single member: avatar, name, status label, (我)
 │       └── lib/
 │           ├── api.ts            Typed fetch for 5 endpoints (rooms + token + chat messages)
 │           ├── session.ts        localStorage: sessionId (UUID), recent rooms (max 10)
@@ -71,11 +74,12 @@ Server loads from `server/.env` (dotenv):
 
 | Method | Path | Body | Returns | Notes |
 |--------|------|------|---------|-------|
+| `GET` | `/api/health` | — | `{ status: "ok" }` | Health check |
 | `POST` | `/api/rooms` | `{ name }` | `{ code, name, shareUrl }` | Room code: 6-char, charset `A-Z,2-9` (no 0/O/I/L) |
 | `GET` | `/api/rooms/:code` | — | `{ exists, code, name, created_at }` | Case-insensitive. Returns 404 with `exists: false` if not found |
 | `POST` | `/api/token` | `{ code, nickname }` | `{ token, livekitUrl, roomName, roomCode, roomName2 }` | Verifies room exists before signing |
 | `POST` | `/api/rooms/:code/messages` | `{ sessionId, nickname, content }` | `ChatMessage` (201) | Validates: room exists, content 1-2000 chars, nickname non-empty |
-| `GET` | `/api/rooms/:code/messages` | `?after=<id>` or `?before=<ts>&limit=50` | `{ messages[], hasMore }` | Polling mode (`after`) or pagination mode (`before`). Max limit 100 |
+| `GET` | `/api/rooms/:code/messages` | `?after=<id>` or `?before=<ts>&limit=50` | `{ messages[], hasMore }` | `before` mode for pagination (used by frontend), `after` mode for polling. Max limit 100 |
 
 ## Database (sql.js WASM SQLite)
 
@@ -168,6 +172,25 @@ This enables browser-level AEC. Without these, Chrome defaults may vary.
 - `nanoid` — used server-side for identity suffixes
 - `bcryptjs` — **no longer used** (was for admin passwords; removed in MVP simplification)
 - `FocusLayout` (from `@livekit/components-react`) — used for screen share rendering; see Screen sharing section for rationale
+- Key LiveKit hooks in use: `useParticipants`, `useLocalParticipant`, `useTracks`, `useRoomContext` (all from `@livekit/components-react`)
+
+### Online member list
+
+A right sidebar panel showing all online participants with real-time status.
+
+**Toggle:** `👥 成员` button in the top bar, adjacent to the chat toggle. Controlled by `memberListOpen` state.
+
+**Data source:** `useParticipants()` (from `@livekit/components-react`) inside `<LiveKitRoom>` context. Returns `(RemoteParticipant | LocalParticipant)[]` with live updates on connect/disconnect.
+
+**Sort order:** speaking → screen sharing → alphabetical by display name (custom sort, not `useSortedParticipants`).
+
+**Per-member display (`MemberItem`):**
+- Avatar: 28px circle, color `hsl(identityHue, 55%, 45%)`, first character of display name
+- Name: `p.name` (server sets this to the original nickname without `#suffix`), or fallback to stripping `#` from `p.identity`
+- Local user: `(我)` tag in primary color next to name
+- Status labels: `说话中` (green, when `isSpeaking`), `📺 共享中` (primary, when `isScreenShareEnabled`), muted avatar (grayscale when `!isMicrophoneEnabled`)
+
+**Relevant hooks:** `useParticipants`, `useLocalParticipant`, `useTracks` (all from `@livekit/components-react`).
 
 ### `created_at` precision (milliseconds)
 
@@ -209,7 +232,7 @@ Chat uses **HTTP persistence + LiveKit Data Channel** for real-time delivery. Th
 
 **Message coalescing:** `MessageItem` skips the avatar/nickname/header when the same sender sends within 5 minutes of their last message.
 
-**Layout:** Voice area (`flex: 1`) + ChatPanel (320px, conditional). Panel has `padding-bottom: 80px` to clear the fixed Toolbar.
+**Layout:** `LiveKitRoom` is a direct flex child of the main area (`flex: 1, display: flex`), wrapping voice area + member panel + toolbar. `ChatPanel` is a sibling *outside* `LiveKitRoom` (it doesn't need LiveKit context). Voice area (`flex: 1`) + optional MemberListPanel (320px) + optional ChatPanel (320px). Panel has `padding-bottom: 80px` to clear the fixed Toolbar.
 
 ## Known quirks & pitfalls
 
