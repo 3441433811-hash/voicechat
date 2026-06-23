@@ -1,6 +1,10 @@
 import { TrackToggle, useLocalParticipant } from "@livekit/components-react";
 import { Track } from "livekit-client";
 
+const screenShareSupported =
+  typeof navigator !== "undefined" &&
+  !!navigator.mediaDevices?.getDisplayMedia;
+
 interface ToolbarProps {
   onLeave: () => void;
   speakerOn: boolean;
@@ -9,6 +13,9 @@ interface ToolbarProps {
 
 export default function Toolbar({ onLeave, speakerOn, onToggleSpeaker }: ToolbarProps) {
   const { localParticipant } = useLocalParticipant();
+  const screenShareActive = !!localParticipant?.getTrackPublication(
+    Track.Source.ScreenShare
+  );
 
   return (
     <div
@@ -50,6 +57,29 @@ export default function Toolbar({ onLeave, speakerOn, onToggleSpeaker }: Toolbar
       >
         {localParticipant?.isMicrophoneEnabled ? "🎤" : "🔇"}
       </TrackToggle>
+
+      {/* Screen share toggle */}
+      {screenShareSupported && (
+        <TrackToggle
+          source={Track.Source.ScreenShare}
+          initialState={false}
+          style={{
+            width: 48,
+            height: 48,
+            borderRadius: "50%",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 20,
+            border: "none",
+            cursor: "pointer",
+            background: screenShareActive ? "var(--primary)" : "var(--bg-hover)",
+            color: screenShareActive ? "#fff" : "var(--text)",
+          }}
+        >
+          🖥️
+        </TrackToggle>
+      )}
 
       {/* Speaker toggle */}
       <button

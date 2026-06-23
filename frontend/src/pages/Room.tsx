@@ -4,6 +4,7 @@ import {
   LiveKitRoom,
   GridLayout,
   ParticipantTile,
+  FocusLayout,
   RoomAudioRenderer,
   useTracks,
   useRoomContext,
@@ -309,7 +310,7 @@ export default function Room() {
             serverUrl={livekitUrl}
             connect={true}
             audio={true}
-            video={false}
+            video={true}
             onDisconnected={handleLeave}
             style={{ height: "100%" }}
           >
@@ -382,21 +383,56 @@ function ParticipantGrid() {
   const tracks = useTracks(
     [
       { source: Track.Source.Microphone, withPlaceholder: true },
+      { source: Track.Source.ScreenShare, withPlaceholder: false },
     ],
     { onlySubscribed: false }
   );
+
+  const screenTracks = tracks.filter(
+    (t) => t.source === Track.Source.ScreenShare
+  );
+  const micTracks = tracks.filter(
+    (t) => t.source === Track.Source.Microphone
+  );
+  const hasScreenShare = screenTracks.length > 0;
 
   return (
     <div
       style={{
         height: "calc(100% - 80px)",
-        overflow: "auto",
+        display: "flex",
+        flexDirection: "column",
         padding: 8,
+        gap: 8,
       }}
     >
-      <GridLayout tracks={tracks} style={{ gap: 12 }}>
-        <ParticipantTile />
-      </GridLayout>
+      {/* Screen share area — FocusLayout avoids the ParticipantTile flex-column height bug */}
+      {hasScreenShare ? (
+        <div className="screen-share-area" style={{ flex: 1, minHeight: 0 }}>
+          {screenTracks.map((track) => (
+            <FocusLayout
+              key={track.publication?.trackSid}
+              trackRef={track}
+            />
+          ))}
+        </div>
+      ) : (
+        <div
+          className="screen-share-area screen-share-area--empty"
+          style={{ flexShrink: 0 }}
+        >
+          <span className="screen-share-area__empty-text">
+            点击底部 🖥️ 共享你的屏幕
+          </span>
+        </div>
+      )}
+
+      {/* Voice participants */}
+      <div style={{ flexShrink: 0 }}>
+        <GridLayout tracks={micTracks} style={{ gap: 12 }}>
+          <ParticipantTile />
+        </GridLayout>
+      </div>
     </div>
   );
 }
