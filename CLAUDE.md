@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A web-based voice chat platform. No accounts — users enter a nickname, create or join a **room** by 6-character room code. Everyone is equal (no admin/roles). Voice chat via LiveKit SFU (Cloud-hosted, no self-hosted SFU needed for dev).
 
-**Current scope:** voice + text chat. Screen sharing and admin roles are deferred to later phases.
+**Current scope:** voice + text chat + screen sharing. Admin roles are deferred to later phases.
 
 ## Repo structure
 
@@ -25,7 +25,7 @@ voice-chat/
 │       │   ├── PreJoin.tsx       Nickname input + microphone permission & test before entering
 │       │   └── Room.tsx          LiveKitRoom + ChatSync + chat panel — Data Channel real-time chat
 │       ├── components/
-│       │   ├── Toolbar.tsx       Mic toggle (LiveKit TrackToggle) + speaker toggle + leave button
+│       │   ├── Toolbar.tsx       Mic + screen share + speaker toggle + leave button
 │       │   └── chat/
 │       │       ├── ChatPanel.tsx      Right sidebar container (320px)
 │       │       ├── MessageList.tsx    Scrollable message list, auto-scroll, load-older trigger
@@ -114,9 +114,36 @@ When navigating to `/room/:code`, **`location.state` must carry `{ nickname, roo
 
 - Identity format: `{nickname}#{random6}` — the random suffix prevents participant identity collisions when users pick the same nickname
 - Room name = 6-char room code directly (no prefix)
-- Grants: `roomJoin`, `canPublish`, `canSubscribe`, `canPublishData` (for text chat via LiveKit data channel in the future)
+- Grants: `roomJoin`, `canPublish` (mic + screen share), `canSubscribe`, `canPublishData` (text chat via Data Channel)
 - TTL: 10 minutes (only used to establish connection; LiveKit maintains the session after)
 - `livekitUrl` returned to client: the `wss://` LiveKit Cloud URL; browser connects directly to LiveKit for media
+
+### Screen sharing
+
+Screen sharing uses LiveKit's `Track.Source.ScreenShare` — no new server endpoints or DB tables.
+
+**Publishing (sender):**
+- `Toolbar.tsx` renders a `TrackToggle` with `source={Track.Source.ScreenShare}` and `initialState={false}`
+- Clicking triggers the browser's native `getDisplayMedia` picker → track published via LiveKit SFU
+- Active state detected via `localParticipant.getTrackPublication(Track.Source.ScreenShare)`
+- Gated behind `navigator.mediaDevices?.getDisplayMedia` feature detection
+
+**Receiving (viewer):**
+- `LiveKitRoom` has `video={true}` to auto-subscribe to remote video tracks. No camera track is published because the app doesn't render a camera `TrackToggle`.
+- `ParticipantGrid` filters `Track.Source.ScreenShare` tracks separately from mic tracks
+- Screen share tracks are rendered with **`FocusLayout`**, NOT `GridLayout` + `ParticipantTile`. Reason: `ParticipantTile` is a flex-column container; its inner `<video>` uses `height: 100%` which can't resolve correctly in the nested flex context, causing `overflow: hidden` to crop the bottom half of the shared screen. `FocusLayout` is LiveKit's own solution for focused/screen-share views and handles sizing correctly.
+
+**Layout:**
+```
+┌──────────────────────────────────┐
+│  Screen share area (flex: 1)     │  ← FocusLayout per track
+│  (empty prompt when no shares)   │
+├──────────────────────────────────┤
+│  Voice participants (flexShrink) │  ← GridLayout + ParticipantTile
+└──────────────────────────────────┘
+```
+- `.screen-share-area`: dark background container, `flex: 1, minHeight: 0`
+- `.screen-share-area--empty`: centered prompt text when no one is sharing
 
 ### Speaker mute mechanism
 
@@ -140,6 +167,7 @@ This enables browser-level AEC. Without these, Chrome defaults may vary.
 - `livekit-client` — the underlying LiveKit SDK
 - `nanoid` — used server-side for identity suffixes
 - `bcryptjs` — **no longer used** (was for admin passwords; removed in MVP simplification)
+- `FocusLayout` (from `@livekit/components-react`) — used for screen share rendering; see Screen sharing section for rationale
 
 ### `created_at` precision (milliseconds)
 
@@ -191,3 +219,4 @@ Chat uses **HTTP persistence + LiveKit Data Channel** for real-time delivery. Th
 4. **Caddyfile & docker-compose.yml** exist but are for self-hosted LiveKit deployments only. Cloud development does not use them.
 5. **`talkroom/` directory** — frozen V1 implementation (WebRTC Mesh + Next.js), not maintained. Do not modify.
 6. **DB schema `DEFAULT unixepoch()` returns seconds, but server uses `Date.now()` (milliseconds)** — the DEFAULT is never invoked; server always provides the value. If you ever insert messages without an explicit `created_at`, rows will have second-level timestamps and sort before millisecond rows.
+7. **Do NOT render screen share tracks with `GridLayout` + `ParticipantTile`** — the `ParticipantTile` component uses `display: flex; flex-direction: column` with `overflow: hidden`, and its inner `<video>` has `height: 100%`. When nested inside a CSS grid cell, the percentage height can't resolve correctly in the flex context, causing the video to fall back to its intrinsic resolution and get cropped. Use `FocusLayout` instead — it's LiveKit's intended component for screen share streams.
