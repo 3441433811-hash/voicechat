@@ -21,6 +21,7 @@ import { addRecentRoom, getSessionId } from "../lib/session";
 import { notifyRoomJoined, listenForDuplicate } from "../lib/roomChannel";
 import Toolbar from "../components/Toolbar";
 import ChatPanel from "../components/chat/ChatPanel";
+import MemberListPanel from "../components/members/MemberListPanel";
 
 export default function Room() {
   const { code } = useParams<{ code: string }>();
@@ -39,6 +40,7 @@ export default function Room() {
 
   // Chat state
   const [chatOpen, setChatOpen] = useState(false);
+  const [memberListOpen, setMemberListOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [messagesLoading, setMessagesLoading] = useState(false);
@@ -274,6 +276,13 @@ export default function Room() {
             📋 复制邀请链接
           </button>
           <button
+            className="btn btn-ghost"
+            style={{ padding: "6px 12px", fontSize: 13 }}
+            onClick={() => setMemberListOpen((v) => !v)}
+          >
+            👥 成员
+          </button>
+          <button
             className="btn btn-ghost chat-toggle-btn"
             style={{ padding: "6px 12px", fontSize: 13 }}
             onClick={() => setChatOpen((v) => !v)}
@@ -296,37 +305,42 @@ export default function Room() {
           overflow: "hidden",
         }}
       >
-        {/* Voice area */}
-        <div
-          style={{
-            flex: 1,
-            overflow: "auto",
-            padding: 20,
-            minWidth: 0,
-          }}
+        <LiveKitRoom
+          token={token}
+          serverUrl={livekitUrl}
+          connect={true}
+          audio={true}
+          video={true}
+          onDisconnected={handleLeave}
+          style={{ flex: 1, display: "flex", overflow: "hidden", minWidth: 0 }}
         >
-          <LiveKitRoom
-            token={token}
-            serverUrl={livekitUrl}
-            connect={true}
-            audio={true}
-            video={true}
-            onDisconnected={handleLeave}
-            style={{ height: "100%" }}
+          <ChatSync
+            onMessage={handleDataMessage}
+            onPublish={(pub) => { publishRef.current = pub; }}
+          />
+          <RoomAudioRenderer />
+
+          {/* Voice area */}
+          <div
+            style={{
+              flex: 1,
+              overflow: "auto",
+              padding: 20,
+              minWidth: 0,
+            }}
           >
-            <ChatSync
-              onMessage={handleDataMessage}
-              onPublish={(pub) => { publishRef.current = pub; }}
-            />
-            <RoomAudioRenderer />
             <ParticipantGrid />
-            <Toolbar
-              onLeave={handleLeave}
-              speakerOn={speakerOn}
-              onToggleSpeaker={() => setSpeakerOn((v) => !v)}
-            />
-          </LiveKitRoom>
-        </div>
+          </div>
+
+          {/* Member list panel */}
+          {memberListOpen && <MemberListPanel />}
+
+          <Toolbar
+            onLeave={handleLeave}
+            speakerOn={speakerOn}
+            onToggleSpeaker={() => setSpeakerOn((v) => !v)}
+          />
+        </LiveKitRoom>
 
         {/* Chat panel */}
         {chatOpen && (
