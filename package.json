@@ -1,0 +1,11 @@
+{
+  "name": "voice-chat",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@upstash/redis": "^1.38.0",
+    "livekit-server-sdk": "^2.9.0",
+    "nanoid": "^5.1.0"
+  }
+}

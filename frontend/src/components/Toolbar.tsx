@@ -55,7 +55,7 @@ export default function Toolbar({ onLeave, speakerOn, onToggleSpeaker }: Toolbar
             : "#fff",
         }}
       >
-        {localParticipant?.isMicrophoneEnabled ? "🎤" : "🔇"}
+        🎤
       </TrackToggle>
 
       {/* Screen share toggle */}

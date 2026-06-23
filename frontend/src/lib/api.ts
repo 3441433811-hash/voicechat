@@ -15,7 +15,6 @@ export async function createRoom(name: string) {
   return res.json() as Promise<{
     code: string;
     name: string;
-    shareUrl: string;
   }>;
 }
 

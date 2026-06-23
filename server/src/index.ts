@@ -1,14 +1,17 @@
 import "dotenv/config";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
-import { initDb } from "./db.js";
 import { registerRoutes } from "./routes.js";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
 
 async function main() {
-  await initDb();
-  console.log("SQLite database initialized");
+  if (!process.env.UPSTASH_REDIS_REST_URL) {
+    console.warn(
+      "⚠ Upstash Redis not configured. Set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN env vars.\n" +
+      "  Run `vercel env pull` or `vercel link` to pull from Vercel, or set manually."
+    );
+  }
 
   const app = Fastify({ logger: true });
 

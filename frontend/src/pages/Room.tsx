@@ -268,16 +268,6 @@ export default function Room() {
           <button
             className="btn btn-ghost"
             style={{ padding: "6px 12px", fontSize: 13 }}
-            onClick={() => {
-              const url = `${window.location.origin}/prejoin/${code}`;
-              navigator.clipboard.writeText(url).catch(() => {});
-            }}
-          >
-            📋 复制邀请链接
-          </button>
-          <button
-            className="btn btn-ghost"
-            style={{ padding: "6px 12px", fontSize: 13 }}
             onClick={() => setMemberListOpen((v) => !v)}
           >
             👥 成员
