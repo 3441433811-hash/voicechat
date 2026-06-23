@@ -98,7 +98,7 @@ Two tables:
 | `sender_nickname` | TEXT | Display name at send time (denormalized) |
 | `sender_session_id` | TEXT | Browser sessionId, for avatar color + coalescing |
 | `content` | TEXT | Message body, 1-2000 chars |
-| `created_at` | INTEGER | Unix timestamp (seconds) |
+| `created_at` | INTEGER | Unix timestamp (milliseconds — `Date.now()`) |
 
 Index: `(room_code, created_at DESC)` for fast polling queries.
 
@@ -141,6 +141,14 @@ This enables browser-level AEC. Without these, Chrome defaults may vary.
 - `nanoid` — used server-side for identity suffixes
 - `bcryptjs` — **no longer used** (was for admin passwords; removed in MVP simplification)
 
+### `created_at` precision (milliseconds)
+
+All `messages.created_at` values are **millisecond** Unix timestamps (`Date.now()`). This ensures correct chronological ordering even when multiple messages are sent within the same second — with second-level precision, nanoid-based ID ordering becomes non-deterministic. The DB schema default (`unixepoch()`) returns seconds but is never used; the server always provides the value.
+
+- **`MessageItem`**: `new Date(message.created_at)` — no `* 1000` needed
+- **`MessageList` coalescing**: `msg.created_at - prev.created_at > 300_000` (5 minutes in ms)
+- **API `before` parameter**: clients pass `created_at` value as-is (milliseconds); server compares directly
+
 ### No TypeScript build for dev
 
 - Server: `tsx watch` runs TypeScript directly (no `tsc` step)
@@ -182,3 +190,4 @@ Chat uses **HTTP persistence + LiveKit Data Channel** for real-time delivery. Th
 3. **`roomName2` field** — the token endpoint returns both `roomName` (LiveKit room = code) and `roomName2` (human-readable name). The naming is awkward but frontend relies on it.
 4. **Caddyfile & docker-compose.yml** exist but are for self-hosted LiveKit deployments only. Cloud development does not use them.
 5. **`talkroom/` directory** — frozen V1 implementation (WebRTC Mesh + Next.js), not maintained. Do not modify.
+6. **DB schema `DEFAULT unixepoch()` returns seconds, but server uses `Date.now()` (milliseconds)** — the DEFAULT is never invoked; server always provides the value. If you ever insert messages without an explicit `created_at`, rows will have second-level timestamps and sort before millisecond rows.
